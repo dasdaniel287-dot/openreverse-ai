@@ -1,0 +1,6 @@
+{
+  "name": "OpenReverse AI",
+  "description": "An open-source AI-powered reverse engineering, software analysis, and defensive security intelligence platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

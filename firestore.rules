@@ -1,0 +1,443 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'dasdaniel287@gmail.com' ||
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isOwner(ownerId) {
+      return isVerifiedUser() && request.auth.uid == ownerId;
+    }
+
+    function ownsProject(projectId) {
+      return isValidId(projectId) &&
+        exists(/databases/$(database)/documents/projects/$(projectId)) &&
+        get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid;
+    }
+
+    // Validation Blueprints
+    function isValidUserProfile(data, userId) {
+      return data.uid is string && data.uid == userId &&
+        isValidId(data.uid) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 512)) &&
+        data.role in ['analyst', 'admin'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProject(data, projectId) {
+      return data.id is string && data.id == projectId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
+        data.targetType in ['website', 'apk', 'exe', 'source', 'api', 'mixed'] &&
+        (!('targetUrl' in data) || (data.targetUrl is string && data.targetUrl.size() <= 512)) &&
+        data.authorizationAttested is bool &&
+        data.status in ['active', 'archived'] &&
+        data.analysisCount is int && data.analysisCount >= 0 && data.analysisCount <= 1000000 &&
+        data.findingCount is int && data.findingCount >= 0 && data.findingCount <= 1000000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUploadedFile(data, fileId) {
+      return data.id is string && data.id == fileId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        data.projectId is string && isValidId(data.projectId) &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 255 &&
+        data.fileCategory in ['apk', 'exe', 'source', 'openapi', 'archive'] &&
+        data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 128 &&
+        data.sizeBytes is int && data.sizeBytes >= 0 && data.sizeBytes <= 52428800 &&
+        data.sha256 is string && data.sha256.size() == 64 && data.sha256.matches('^[a-f0-9]{64}$') &&
+        (!('previewText' in data) || (data.previewText is string && data.previewText.size() <= 16000)) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidAnalysisJob(data, jobId) {
+      return data.id is string && data.id == jobId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        data.projectId is string && isValidId(data.projectId) &&
+        data.analyzerType in ['website', 'apk', 'exe', 'source', 'api', 'security'] &&
+        data.targetLabel is string && data.targetLabel.size() >= 1 && data.targetLabel.size() <= 512 &&
+        data.status in ['queued', 'running', 'completed', 'failed'] &&
+        data.scheduleInterval in ['once', 'hourly', 'daily', 'weekly'] &&
+        data.automationEnabled is bool &&
+        (!('lastRunHash' in data) || (data.lastRunHash is string && data.lastRunHash.size() <= 128)) &&
+        (!('errorMessage' in data) || (data.errorMessage is string && data.errorMessage.size() <= 1000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAnalysisResult(data, resultId) {
+      return data.id is string && data.id == resultId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        data.projectId is string && isValidId(data.projectId) &&
+        data.jobId is string && isValidId(data.jobId) &&
+        data.analyzerType in ['website', 'apk', 'exe', 'source', 'api', 'security'] &&
+        data.targetLabel is string && data.targetLabel.size() >= 1 && data.targetLabel.size() <= 512 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 4000 &&
+        data.riskScore is number && data.riskScore >= 0 && data.riskScore <= 100 &&
+        data.findingCount is int && data.findingCount >= 0 && data.findingCount <= 10000 &&
+        data.data is map &&
+        (!('limitations' in data) || (data.limitations is string && data.limitations.size() <= 1500)) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidSecurityFinding(data, findingId) {
+      return data.id is string && data.id == findingId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        data.projectId is string && isValidId(data.projectId) &&
+        data.resultId is string && isValidId(data.resultId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.severity in ['critical', 'high', 'medium', 'low', 'info'] &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 120 &&
+        (!('owaspRef' in data) || (data.owaspRef is string && data.owaspRef.size() <= 80)) &&
+        (!('evidence' in data) || (data.evidence is string && data.evidence.size() <= 2000)) &&
+        data.remediation is string && data.remediation.size() >= 1 && data.remediation.size() <= 2000 &&
+        data.status in ['open', 'acknowledged', 'resolved'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAiConversation(data, conversationId) {
+      return data.id is string && data.id == conversationId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        (!('projectId' in data) || (data.projectId is string && data.projectId.size() <= 128)) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.language in ['en', 'bn'] &&
+        data.provider in ['gemini', 'ollama'] &&
+        data.model is string && data.model.size() >= 1 && data.model.size() <= 100 &&
+        data.messages is list && data.messages.size() <= 100 &&
+        (data.messages.size() == 0 || data.messages[0] is map) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidReportRecord(data, reportId) {
+      return data.id is string && data.id == reportId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        data.projectId is string && isValidId(data.projectId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.format in ['pdf', 'html', 'json', 'markdown'] &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 3000 &&
+        data.findingCount is int && data.findingCount >= 0 && data.findingCount <= 10000 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data, notificationId) {
+      return data.id is string && data.id == notificationId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 600 &&
+        data.category in ['analysis', 'security', 'automation', 'system'] &&
+        data.read is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidAuditLog(data, logId) {
+      return data.id is string && data.id == logId && isValidId(data.id) &&
+        data.ownerId is string && isValidId(data.ownerId) &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 120 &&
+        data.resourceType is string && data.resourceType.size() >= 1 && data.resourceType.size() <= 80 &&
+        data.resourceId is string && data.resourceId.size() >= 1 && data.resourceId.size() <= 128 &&
+        (!('details' in data) || (data.details is string && data.details.size() <= 600)) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidUserSettings(data, userId) {
+      return data.ownerId is string && data.ownerId == userId && isValidId(data.ownerId) &&
+        data.theme in ['dark', 'light'] &&
+        data.aiProvider in ['gemini', 'ollama'] &&
+        data.geminiModel in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'] &&
+        (!('ollamaBaseUrl' in data) || (data.ollamaBaseUrl is string && data.ollamaBaseUrl.size() <= 256)) &&
+        (!('ollamaModel' in data) || (data.ollamaModel is string && data.ollamaModel.size() <= 100)) &&
+        data.preferredLanguage in ['en', 'bn'] &&
+        data.emailNotifications is bool &&
+        data.totalAiRequests is int && data.totalAiRequests >= 0 && data.totalAiRequests <= 10000000 &&
+        data.updatedAt is timestamp;
+    }
+
+    // 1. Users Collection (PII strictly isolated to owner or admin)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        incoming().keys().hasAll(['uid', 'displayName', 'email', 'role', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'role', 'createdAt', 'updatedAt']) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().role == 'analyst' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) && (
+          isAdmin() || (
+            isOwner(userId) &&
+            incoming().uid == existing().uid &&
+            incoming().role == existing().role &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(userId) && isOwner(userId);
+    }
+
+    // 2. Projects Collection
+    match /projects/{projectId} {
+      allow get: if isValidId(projectId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(projectId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'name', 'targetType', 'authorizationAttested', 'status', 'analysisCount', 'findingCount', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'name', 'description', 'targetType', 'targetUrl', 'authorizationAttested', 'status', 'analysisCount', 'findingCount', 'createdAt', 'updatedAt']) &&
+        isValidProject(incoming(), projectId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(projectId) &&
+        isValidProject(incoming(), projectId) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(existing().ownerId) && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'targetType', 'targetUrl', 'status', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['analysisCount', 'findingCount', 'updatedAt'])
+            )
+          )
+        );
+      allow delete: if isValidId(projectId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // 3. Uploaded Files Collection
+    match /uploadedFiles/{fileId} {
+      allow get: if isValidId(fileId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(fileId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'projectId', 'fileName', 'fileCategory', 'mimeType', 'sizeBytes', 'sha256', 'createdAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'projectId', 'fileName', 'fileCategory', 'mimeType', 'sizeBytes', 'sha256', 'previewText', 'createdAt']) &&
+        isValidUploadedFile(incoming(), fileId) &&
+        incoming().createdAt == request.time &&
+        ownsProject(incoming().projectId);
+      allow update: if false;
+      allow delete: if isValidId(fileId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // 4. Analysis Jobs Collection
+    match /analysisJobs/{jobId} {
+      allow get: if isValidId(jobId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(jobId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'projectId', 'analyzerType', 'targetLabel', 'status', 'scheduleInterval', 'automationEnabled', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'projectId', 'analyzerType', 'targetLabel', 'status', 'scheduleInterval', 'automationEnabled', 'lastRunHash', 'errorMessage', 'createdAt', 'updatedAt']) &&
+        isValidAnalysisJob(incoming(), jobId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        ownsProject(incoming().projectId);
+      allow update: if isValidId(jobId) &&
+        isValidAnalysisJob(incoming(), jobId) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().projectId == existing().projectId &&
+        incoming().analyzerType == existing().analyzerType &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(existing().ownerId) && (
+              (existing().status in ['queued', 'running'] &&
+               incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lastRunHash', 'errorMessage', 'updatedAt'])) ||
+              (incoming().diff(existing()).affectedKeys().hasOnly(['scheduleInterval', 'automationEnabled', 'status', 'lastRunHash', 'updatedAt']))
+            )
+          )
+        );
+      allow delete: if isValidId(jobId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // 5. Analysis Results Collection
+    match /analysisResults/{resultId} {
+      allow get: if isValidId(resultId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(resultId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'projectId', 'jobId', 'analyzerType', 'targetLabel', 'summary', 'riskScore', 'findingCount', 'data', 'createdAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'projectId', 'jobId', 'analyzerType', 'targetLabel', 'summary', 'riskScore', 'findingCount', 'data', 'limitations', 'createdAt']) &&
+        isValidAnalysisResult(incoming(), resultId) &&
+        incoming().createdAt == request.time &&
+        ownsProject(incoming().projectId);
+      allow update: if false;
+      allow delete: if isValidId(resultId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // 6. Security Findings Collection
+    match /securityFindings/{findingId} {
+      allow get: if isValidId(findingId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(findingId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'projectId', 'resultId', 'title', 'severity', 'category', 'remediation', 'status', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'projectId', 'resultId', 'title', 'severity', 'category', 'owaspRef', 'evidence', 'remediation', 'status', 'createdAt', 'updatedAt']) &&
+        isValidSecurityFinding(incoming(), findingId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        ownsProject(incoming().projectId);
+      allow update: if isValidId(findingId) &&
+        isValidSecurityFinding(incoming(), findingId) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().projectId == existing().projectId &&
+        incoming().resultId == existing().resultId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(existing().ownerId) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(findingId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // 7. AI Conversations Collection
+    match /aiConversations/{conversationId} {
+      allow get: if isValidId(conversationId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(conversationId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'title', 'language', 'provider', 'model', 'messages', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'projectId', 'title', 'language', 'provider', 'model', 'messages', 'createdAt', 'updatedAt']) &&
+        isValidAiConversation(incoming(), conversationId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(conversationId) &&
+        isValidAiConversation(incoming(), conversationId) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(existing().ownerId) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'language', 'provider', 'model', 'messages', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(conversationId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // 8. Reports Collection
+    match /reports/{reportId} {
+      allow get: if isValidId(reportId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(reportId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'projectId', 'title', 'format', 'summary', 'findingCount', 'createdAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'projectId', 'title', 'format', 'summary', 'findingCount', 'createdAt']) &&
+        isValidReportRecord(incoming(), reportId) &&
+        incoming().createdAt == request.time &&
+        ownsProject(incoming().projectId);
+      allow update: if false;
+      allow delete: if isValidId(reportId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // 9. Notifications Collection
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(notificationId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'title', 'message', 'category', 'read', 'createdAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'title', 'message', 'category', 'read', 'createdAt']) &&
+        isValidNotification(incoming(), notificationId) &&
+        incoming().createdAt == request.time;
+      allow update: if isValidId(notificationId) &&
+        isValidNotification(incoming(), notificationId) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt && (
+          isAdmin() || (
+            isOwner(existing().ownerId) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['read'])
+          )
+        );
+      allow delete: if isValidId(notificationId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // 10. Audit Logs Collection (Append-only)
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(logId) &&
+        isVerifiedUser() &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().keys().hasAll(['id', 'ownerId', 'action', 'resourceType', 'resourceId', 'createdAt']) &&
+        incoming().keys().hasOnly(['id', 'ownerId', 'action', 'resourceType', 'resourceId', 'details', 'createdAt']) &&
+        isValidAuditLog(incoming(), logId) &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // 11. User Settings Collection
+    match /userSettings/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        incoming().keys().hasAll(['ownerId', 'theme', 'aiProvider', 'geminiModel', 'preferredLanguage', 'emailNotifications', 'totalAiRequests', 'updatedAt']) &&
+        incoming().keys().hasOnly(['ownerId', 'theme', 'aiProvider', 'geminiModel', 'ollamaBaseUrl', 'ollamaModel', 'preferredLanguage', 'emailNotifications', 'totalAiRequests', 'updatedAt']) &&
+        isValidUserSettings(incoming(), userId) &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) &&
+        isValidUserSettings(incoming(), userId) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isOwner(userId) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['theme', 'aiProvider', 'geminiModel', 'ollamaBaseUrl', 'ollamaModel', 'preferredLanguage', 'emailNotifications', 'totalAiRequests', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(userId) && isOwner(userId);
+    }
+  }
+}
